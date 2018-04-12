@@ -1,15 +1,34 @@
-import serial
-import threading
+# MIT License
+#
+# Copyright (c) 2018 Justin Marple
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 
-from enum import Enum
+import serial
 import time
-class PyCarbideException(Exception):
+
+class PyNomadException(Exception):
     pass
 
-GRBL_OK = 0
-
-#
-class PyCarbide(threading.Thread):
+# Implements a simple class that allows for the nomad 883 by carbide3d to
+# be controlled over a python script.
+class PyNomad:
     def __init__(self):
         self.version = None
         self.version_number = None
@@ -40,18 +59,16 @@ class PyCarbide(threading.Thread):
         # Parses text for version number
         grbl_text = self._serial.readline()
         print "grbl_text = " + grbl_text
-        '''self.version = grbl_text.split()[1]
-        self.version_number = float(self.version[:3])
-        self.version_letter = self.version[3]'''
+        #self.version = grbl_text.split()[1]
+        #self.version_number = float(self.version[:3])
+        #self.version_letter = self.version[3]
 
     def disconnect(self):
         self._serial.close()
 
     def status(self):
         self._serial.write(b'?')
-        for i in range(0, 6):
-            return self._serial.readline()
-
+        return self._serial.readline()
 
     def _move(self, x=None, y=None, z=None):
         command = ""
@@ -68,6 +85,7 @@ class PyCarbide(threading.Thread):
 
         self._sendMessage(command)
 
+    # Moves to absolute coordinates
     def moveTo(self, x=None, y=None, z=None):
         self.absoluteMode()
         self.linearMotionMode()
@@ -78,6 +96,7 @@ class PyCarbide(threading.Thread):
         self.rapidMotionMode()
         self._move(x, y, z)
 
+    # Moves by relative coordinates 
     def moveBy(self, x=None, y=None, z=None):
         self.incrementalMode()
         self.linearMotionMode()
@@ -95,10 +114,12 @@ class PyCarbide(threading.Thread):
         for i in range(0, max_tries):
             reply = self._serial.readline()
 
-            if 'ok' in reply: return True
-            if 'error' in reply: raise PyCarbideException(reply)
+            print "Reply = " + str(reply)
 
-        raise PyCarbideException("No Response From Machine")
+            if 'ok' in reply: return True
+            if 'error' in reply: raise PyNomadException(reply)
+
+        raise PyNomadException("No Response From Machine")
 
     def _sendMessage(self, data):
         print "Sending = " + str(data)
@@ -132,15 +153,16 @@ class PyCarbide(threading.Thread):
         self._sendMessage('F' + str(int(rate)) + '\n')
         self.feed_rate = int(rate)
 
+    # Sets the units for the feedrate and x/y/z coordinates to be in
     def inInches(self):
-        self._sendMessage('G20')
+        self._sendMessage('G20\n')
         self.units_mode = 'G20'
 
     def inMillimeters(self):
-        self._sendMessage('G21')
+        self._sendMessage('G21\n')
         self.units_mode = 'G21'
 
-    # Other available commands
+    # Other available commands.  Advised to use moveTo and moveBy instead
     def absoluteMode(self):
         self._sendMessage('G90\n')
         self.distance_mode = 'G90'
@@ -157,140 +179,18 @@ class PyCarbide(threading.Thread):
         self._sendMessage('G1\n')
         self.motion_mode = 'G1'
 
+    # Waits until the status of the nomad is not 'Run'
+    def waitUntilStopped(self, max_tries=50):
 
-def rotateGear(s, amount):
-    output = 'P ' + str(amount) + '\n'
-    print "Outputing: " + output
-    s.write(output)
+        try_counter = 0
 
-def waitForRotate(s):
-    time.sleep(0.3)
-    s.flushInput()
+        # Wait until movememnt is done
+        while try_counter < max_tries:
+            state = self.status().split(',')[0]
+            if state != '<Run':
+                break
 
-    while True:
-        s.write('S\n')
-        speed = s.readline()
-        #print repr(speed)
-        speed = float(speed)
-        if speed < 0.01: return
-        time.sleep(0.1)
+            # We don't want to call '?' to often
+            time.sleep(0.3)
 
-def getIndicatorReading(s):
-    s.write('T\n');
-
-    return raw_input("Enter indicator reading:");
-
-def cut_tooth(p, depth, height):
-    p.feedRate(40)
-
-    print "Cutting tooth with depth %f" % depth
-    print "height is %f" % height
-
-    trav_by = 9
-
-    #p.spindleSpeed(2000)
-    #p.spindleClockwise()
-    p.moveByFast(y=-1)
-    p.moveBy(z=height)
-    p.moveBy(y=-depth)
-    p.moveBy(x=-trav_by)
-    #p.moveBy(x=5)
-    p.moveBy(y=depth)
-    p.moveBy(z=-height)
-    p.moveByFast(y=1)
-    p.moveByFast(x=trav_by)
-
-    # Wait until movememnt is done
-    while True:
-        state = p.status().split(',')[0]
-        if state != '<Run':
-            break
-
-        time.sleep(0.3)
-    #p.spindleStop()
-
-def measureRunout(s, num_teeth, ticks_per_rotation):
-    indicator_readings = [0] * num_teeth
-
-    for i in range(0, num_teeth):
-        rotateGear(r, ticks_per_rotation / num_teeth)
-        waitForRotate(r)
-        reading = getIndicatorReading(r)
-
-        indicator_readings[i] = reading
-
-    return indicator_readings
-
-if __name__ == "__main__":
-
-    r = serial.Serial('/dev/ttyACM1', 9600, timeout=20)
-
-    #print "Done"
-
-    p = PyCarbide()
-    p.connect('/dev/ttyACM0')
-    p.unlock()
-
-    num_teeth = 40
-    ticks_per_rotation = 48000
-
-    runout = measureRunout(r, num_teeth, ticks_per_rotation)
-    #runout = ['0.00', '0.00', '-0.01', '-0.02', '0.02', '0.01', '0.05', '0.06', '0.09', '0.14', '0.16', '0.20', '0.25', '0.28', '0.31', '0.34', '0.39', '0.42', '0.46', '0.50', '0.52', '0.54', '0.55', '0.56', '0.56', '0.54', '0.52', '0.49', '0.47', '0.43', '0.38', '0.34', '0.28', '0.25', '0.20', '0.12', '0.10', '0.06', '0.04', '0.01']
-    #runout = [0] * num_teeth
-
-    print runout
-    var = raw_input("Attach gear and press enter to start milling")
-
-    p.spindleSpeed(10000)
-    p.spindleClockwise()
-
-    starting_depth = 0
-
-    for i in range(0, num_teeth):
-        tooth_depth = 0.675
-        j = i + num_teeth/2
-        if j >= num_teeth:
-            j -= num_teeth
-
-        offset_90 = (i + num_teeth/4) % num_teeth
-        offset_180 = (i + num_teeth/2) % num_teeth
-        offset_270 = (i + 3 * num_teeth / 4) % num_teeth
-
-        rotateGear(r, ticks_per_rotation/num_teeth)
-        time.sleep(1)
-        waitForRotate(r)
-
-        height_runout =(
-            (float(runout[offset_90]) + float(runout[offset_270])) / 2.0)
-
-        if (i == 0):
-            starting_depth = float(runout[offset_180])
-
-        cut_tooth(p, tooth_depth - float(runout[offset_180]) + starting_depth, height_runout)
-
-    #p.home()
-
-    #p.spindleSpeed(5000)
-    #p.spindleClockwise()
-
-
-    '''p.moveToFast(x=-30, y=-(69.62)-6.1, z=-82.28-5)
-
-    var = raw_input("ADD DRILL BIT")
-
-    for i in range(0, 42):
-        cut_tooth(p)
-
-        var = raw_input("Rotate Gear")
-        rotateGear(r, 1000)
-        time.sleep(7)
-
-    var = raw_input("REMOVE DRILL BIT")
-
-    p.moveToFast(x=-10, y=-10, z=-10)
-
-    var = raw_input("Press Enter to continue")
-
-    #p.status()'''
-
-    p.disconnect()
+            try_counter = try_counter + 1
